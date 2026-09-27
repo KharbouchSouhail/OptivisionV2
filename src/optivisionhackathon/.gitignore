@@ -1,0 +1,7 @@
+# See repository-root .gitignore
+__pycache__/
+*.py[cod]
+.env
+*.pt
+*.pkl
+.venv/

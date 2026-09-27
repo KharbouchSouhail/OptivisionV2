@@ -1,0 +1,1 @@
+"""Visionnaire laptop client package."""

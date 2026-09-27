@@ -1,17 +1,35 @@
 [project]
 name = "optivisionhackathon"
 version = "0.1.0"
-description = "Add your description here"
+description = "Visionnaire — real-time computer-vision accessibility assistant"
 readme = "README.md"
 authors = [
     { name = "jahjahyassine", email = "jahjah.yassine@ensam-casa.ma" }
 ]
-requires-python = ">=3.14"
-dependencies = []
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python",
+    "numpy",
+    "websockets",
+    "ultralytics",
+    "torch",
+    "torchvision",
+    "pyttsx3",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
 
 [project.scripts]
+visionnaire-server = "optivisionhackathon.server.main:main"
+visionnaire-client = "optivisionhackathon.client.main:main"
 optivisionhackathon = "optivisionhackathon:main"
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["src/optivisionhackathon/tests"]

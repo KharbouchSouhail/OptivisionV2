@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# UV / tooling
+.uv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Models & runtime artifacts
+*.pt
+*.onnx
+*.engine
+yolov8*.pt
+runs/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Data (keep directory structure; ignore private embeddings)
+data/faces/*
+!data/faces/.gitkeep
+src/optivisionhackathon/data/faces/*
+!src/optivisionhackathon/data/faces/.gitkeep
+*.pkl
+
+# Logs
+*.log
