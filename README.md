@@ -1,80 +1,83 @@
 # Visionnaire
 
-Real-time computer-vision accessibility assistant for the OptiVision hackathon.
+Real-time multi-modal computer-vision accessibility assistant for the OptiVision hackathon.
 
 Laptop webcam frames are streamed over a binary WebSocket to an inference server
-(local or NVIDIA Brev GPU). The server runs YOLOv8n and returns a structured JSON
-decision. The laptop speaks the decision with pyttsx3.
+(local or NVIDIA Brev GPU). The server runs YOLOv8n obstacle detection, monocular
+depth and metric distance estimation, deep face recognition, and scene text / OCR,
+fused together into a coherent, prioritized decision. The laptop displays annotated
+live visual overlays and speaks spoken assistance in real time via non-blocking TTS.
 
-## Current MVP
-
-```
-Webcam → JPEG → binary WebSocket → YOLOv8n → Decision → JSON WebSocket → pyttsx3
-```
-
-## Future
+## Full Multi-Modal Pipeline
 
 ```
-YOLO + MiDaS + Face + OCR → Fusion Engine → Decision
+Webcam → JPEG → binary WebSocket → YOLO + Depth + Face + OCR → Fusion Engine → Decision → JSON WebSocket → pyttsx3 / eSpeak-ng
 ```
-
-Those extra models are **not** implemented yet. Empty stubs under
-`server/models/` and `server/fusion/` are reserved for later.
 
 ## Architecture
 
 ```
-LAPTOP / CLIENT                         NVIDIA BREV GPU / SERVER
+LAPTOP / CLIENT                         NVIDIA GPU / BREV SERVER
 ─────────────────                       ──────────────────────────
 OpenCV webcam                           WebSocket server (0.0.0.0)
-JPEG encode                             YOLOv8n inference
-WebSocket client   ── binary frames ──► pipeline (YOLO only for MVP)
-pyttsx3 audio      ◄── JSON decision ── structured Decision
+JPEG encode                             YOLOv8n obstacle detection
+HUD & multi-box overlays                Pinhole depth / distance estimation
+WebSocket client   ── binary frames ──► Deep face recognition (MobileNet embeddings)
+eSpeak-ng audio    ◄── JSON decision ── Scene text OCR (signage & labels)
+                                        Fusion engine + intelligent cooldown
 ```
 
 ### Responsibilities
 
 | Side   | Owns                                              | Must not own                          |
 |--------|---------------------------------------------------|---------------------------------------|
-| Client | camera, JPEG, WebSocket client, TTS               | YOLO / any heavy AI inference         |
-| Server | WebSocket server, YOLO, pipeline, decision logic  | camera or speaker implementations     |
-| Shared | binary frame protocol (`shared/protocol.py`)      | —                                     |
+| Client | Camera, JPEG, WebSocket client, TTS, live HUD     | YOLO / deep AI inference              |
+| Server | WebSocket server, YOLO, Depth, Face, OCR, Fusion  | Camera or speaker implementations     |
+| Shared | Binary frame protocol (`shared/protocol.py`)      | —                                     |
 
 Client and server are strictly separated. Transport (`websocket.py`) is separate
-from inference (`pipeline.py` / `models/yolo.py`).
+from inference (`pipeline.py`).
 
-### Package layout
+### Package Layout
 
 ```
 src/optivisionhackathon/
 ├── client/
-│   ├── main.py
-│   ├── camera.py
-│   ├── websocket.py
-│   └── speaker.py
+│   ├── main.py              # Laptop client loop (camera, HUD preview, TTS)
+│   ├── camera.py            # OpenCV camera capture & JPEG encoding
+│   ├── display.py           # Multi-modal visual overlays (obstacles, faces, signs)
+│   ├── result.py            # Structured decision JSON parser
+│   ├── speaker.py           # Non-blocking, non-overlapping TTS (espeak-ng / pyttsx3)
+│   └── websocket.py         # Async WebSocket client
 ├── server/
-│   ├── main.py
-│   ├── websocket.py
-│   ├── pipeline.py
-│   ├── schemas.py
+│   ├── main.py              # Server entrypoint with CUDA & multi-modal init
+│   ├── websocket.py         # WebSocket server transport
+│   ├── pipeline.py          # Full multi-modal inference pipeline
+│   ├── schemas.py           # Typed dataclasses (Detection, FaceDetection, TextDetection, Decision)
 │   ├── models/
-│   │   ├── yolo.py          ← implemented
-│   │   ├── depth.py         ← future
-│   │   ├── face.py          ← future
-│   │   └── ocr.py           ← future
+│   │   ├── yolo.py          # YOLOv8n obstacle detector (CUDA/CPU)
+│   │   ├── depth.py         # Pinhole depth & metric distance estimation
+│   │   ├── face.py          # Deep face recognition with MobileNet embeddings
+│   │   └── ocr.py           # Scene text & signage recognition
 │   └── fusion/
-│       ├── engine.py        ← future
-│       └── cooldown.py      ← future
+│       ├── engine.py        # Multi-modal priority fusion & utterance generator
+│       └── cooldown.py      # Intelligent cooldown with priority escalation
 ├── shared/
-│   └── protocol.py
-├── data/faces/
+│   └── protocol.py          # Binary frame packet protocol
+├── data/
+│   └── faces/
+│       └── embeddings.pkl   # Registered face embeddings database
 ├── scripts/
+│   ├── register_face.py     # CLI face registration tool
+│   └── verify_flow.py       # End-to-end verification script
 └── tests/
-requirements.txt
-.env.example
+    ├── test_protocol.py     # Binary protocol tests
+    ├── test_pipeline.py     # Pipeline & speech formatting tests
+    ├── test_fusion.py       # Multi-modal fusion, depth, face, and OCR tests
+    └── test_end_to_end.py   # Full integration flow tests
 ```
 
-## Binary WebSocket protocol
+## Binary WebSocket Protocol
 
 Defined in `shared/protocol.py`:
 
@@ -95,7 +98,7 @@ encode_frame(jpeg_bytes) -> bytes
 decode_frame(packet) -> bytes
 ```
 
-## Environment variables
+## Environment Variables
 
 Copy `.env.example` to `.env`:
 
@@ -103,102 +106,67 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-| Variable                   | Default                 | Used by |
-|----------------------------|-------------------------|---------|
-| `VISIONNAIRE_SERVER_URL`   | `ws://localhost:8765`   | Client  |
-| `VISIONNAIRE_HOST`         | `0.0.0.0`               | Server  |
-| `VISIONNAIRE_PORT`         | `8765`                  | Server  |
-| `VISIONNAIRE_CAMERA_INDEX` | `0`                     | Client  |
-| `VISIONNAIRE_JPEG_QUALITY` | `80`                    | Client  |
-| `VISIONNAIRE_TARGET_FPS`   | `5`                     | Client  |
+| Variable                        | Default                 | Used by | Description                                     |
+|---------------------------------|-------------------------|---------|-------------------------------------------------|
+| `VISIONNAIRE_SERVER_URL`        | `ws://localhost:8765`   | Client  | WebSocket URL to connect to                     |
+| `VISIONNAIRE_HOST`              | `0.0.0.0`               | Server  | WebSocket bind address                          |
+| `VISIONNAIRE_PORT`              | `8765`                  | Server  | WebSocket port                                  |
+| `VISIONNAIRE_CAMERA_INDEX`      | `0`                     | Client  | Webcam device index                             |
+| `VISIONNAIRE_JPEG_QUALITY`      | `80`                    | Client  | JPEG compression quality (1-100)                |
+| `VISIONNAIRE_TARGET_FPS`        | `5`                     | Client  | Capture and send framerate                      |
+| `VISIONNAIRE_ENABLE_DEPTH`      | `true`                  | Server  | Enable monocular depth & metric distance        |
+| `VISIONNAIRE_ENABLE_FACE`       | `true`                  | Server  | Enable face recognition                         |
+| `VISIONNAIRE_ENABLE_OCR`        | `true`                  | Server  | Enable scene text recognition                   |
+| `VISIONNAIRE_CRITICAL_DIST`     | `1.5`                   | Server  | Critical proximity distance in meters           |
+| `VISIONNAIRE_WARNING_DIST`      | `3.0`                   | Server  | Warning proximity distance in meters            |
+| `VISIONNAIRE_FACE_THRESHOLD`    | `0.65`                  | Server  | Face cosine similarity threshold                |
+| `VISIONNAIRE_OCR_CONF`          | `0.40`                  | Server  | OCR minimum confidence                          |
+| `VISIONNAIRE_DECISION_COOLDOWN` | `2.5`                   | Server  | Repetition speech cooldown (seconds)            |
+| `VISIONNAIRE_CRITICAL_COOLDOWN` | `1.0`                   | Server  | Critical alerts cooldown (seconds)              |
 
-Do **not** hardcode a Brev IP. For Brev, set:
+## Registering Known Faces
 
-```bash
-VISIONNAIRE_SERVER_URL=ws://<BREV_ADDRESS>:8765
-```
-
-## Local development
-
-Requires Python 3.10 or 3.11.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
-cp .env.example .env
-```
-
-### Run the server (terminal 1)
+Register faces directly using the webcam or an image file:
 
 ```bash
-python -m optivisionhackathon.server.main
+# Register from webcam:
+uv run python -m optivisionhackathon.scripts.register_face --name "Souhail" --webcam
+
+# Register from an image:
+uv run python -m optivisionhackathon.scripts.register_face --name "Souhail" --image path/to/photo.jpg
+
+# List all registered faces:
+uv run python -m optivisionhackathon.scripts.register_face --list
+
+# Delete a face:
+uv run python -m optivisionhackathon.scripts.register_face --delete "Souhail"
 ```
 
-At startup you should see CUDA / device logs, for example:
+## Running the Application
 
-```
-CUDA available: True
-GPU: NVIDIA L4
-Inference device: cuda
-Loading YOLOv8n...
-```
-
-On a machine without CUDA it falls back to CPU automatically.
-
-### Run the client (terminal 2)
+### 1. Run the Server
 
 ```bash
-python -m optivisionhackathon.client.main
+uv run python -m optivisionhackathon.server.main
 ```
 
-The client captures at ~5 FPS, waits for each decision (no unbounded frame queue),
-and speaks non-empty messages via pyttsx3.
+At startup, the server automatically detects CUDA (NVIDIA GPU) or falls back to CPU,
+loads YOLOv8n, initializes Depth, loads Face embeddings, and starts listening.
 
-## NVIDIA Brev deployment
-
-1. Start a GPU instance on NVIDIA Brev.
-2. Clone this repo on the instance and install dependencies (with CUDA-enabled torch).
-3. Run the **same** server code — only env config changes:
+### 2. Run the Client
 
 ```bash
-export VISIONNAIRE_HOST=0.0.0.0
-export VISIONNAIRE_PORT=8765
-python -m optivisionhackathon.server.main
+uv run python -m optivisionhackathon.client.main
 ```
 
-4. On the laptop, point the client at the instance:
+The client streams webcam frames at ~5 FPS, renders live OpenCV preview with bounding
+boxes (color-coded by distance severity), face tags, and signs, and speaks audio
+alerts via non-blocking TTS. Press `q` to exit.
+
+## Running Tests
+
+Run the complete test suite with `uv run pytest`:
 
 ```bash
-export VISIONNAIRE_SERVER_URL=ws://<BREV_ADDRESS>:8765
-python -m optivisionhackathon.client.main
+uv run pytest -v
 ```
-
-No code changes are required between local and Brev — only environment variables.
-
-Ensure the Brev firewall / port mapping exposes `VISIONNAIRE_PORT` (default 8765).
-
-## Tests
-
-```bash
-pip install pytest
-pytest src/optivisionhackathon/tests/test_protocol.py -v
-```
-
-## Current MVP limitations
-
-- Only YOLOv8n is used (no depth, face ID, or OCR)
-- Distance is a coarse heuristic from bounding-box height, not real meters
-- Only a curated set of COCO obstacle classes is treated as relevant
-- Simple per-key speech cooldown; full fusion engine is not implemented
-- Single-client request/response loop (hackathon-friendly, not production-scaled)
-
-## Planned future models
-
-| Module | Role                                      |
-|--------|-------------------------------------------|
-| MiDaS  | Monocular depth estimation                |
-| Face   | Known-face recognition                    |
-| OCR    | Scene text (signs, labels)                |
-| Fusion | Combine signals into a single Decision    |

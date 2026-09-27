@@ -1,8 +1,10 @@
-"""Text-to-speech output via pyttsx3 (eSpeak / eSpeak-ng)."""
+"""Text-to-speech output via espeak-ng / espeak or pyttsx3."""
 
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import threading
 from typing import Optional
 
@@ -22,26 +24,38 @@ class Speaker:
         self._thread: Optional[threading.Thread] = None
         self._available = False
         self._started = False
+        self._backend: Optional[str] = None
 
     def start(self) -> None:
-        """Initialize and verify the TTS backend (best-effort)."""
+        """Initialize and verify the TTS backend."""
         if self._started:
             return
         self._started = True
+
+        # Check for espeak-ng or espeak CLI binaries
+        if shutil.which("espeak-ng"):
+            self._backend = "espeak-ng"
+            self._available = True
+            logger.info("TTS ready (espeak-ng)")
+            return
+        if shutil.which("espeak"):
+            self._backend = "espeak"
+            self._available = True
+            logger.info("TTS ready (espeak)")
+            return
+
         try:
             import pyttsx3
 
             engine = pyttsx3.init()
-            # Probe the backend without speaking aloud for long.
             _ = engine.getProperty("voices")
             engine.stop()
+            self._backend = "pyttsx3"
             self._available = True
-            logger.info("TTS ready (pyttsx3 / eSpeak)")
+            logger.info("TTS ready (pyttsx3)")
         except Exception:
             self._available = False
-            logger.exception(
-                "TTS initialization failed — continuing without speech"
-            )
+            logger.exception("TTS initialization failed — continuing without speech")
 
     def speak(self, message: str) -> bool:
         """Speak a message if free. Never blocks the caller.
@@ -75,11 +89,22 @@ class Speaker:
         return True
 
     def _speak_worker(self, text: str) -> None:
-        """Create a fresh engine per utterance (safer with eSpeak threads)."""
+        """Run speech playback in a worker thread."""
         try:
+            logger.info("Speaking: %s", text)
+            if self._backend in ("espeak-ng", "espeak"):
+                binary = self._backend
+                assert binary is not None
+                subprocess.run(
+                    [binary, "-s", "175", text],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+
             import pyttsx3
 
-            logger.info("Speaking: %s", text)
             engine = pyttsx3.init()
             try:
                 engine.setProperty("rate", 175)
@@ -93,7 +118,6 @@ class Speaker:
                 pass
         except Exception:
             logger.exception("TTS error while speaking")
-            self._available = False
         finally:
             with self._lock:
                 self._busy = False

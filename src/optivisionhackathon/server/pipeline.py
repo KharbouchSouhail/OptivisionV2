@@ -1,158 +1,87 @@
-"""Inference pipeline: orchestrates models and produces a Decision.
-
-Current MVP flow:
-    frame -> YOLO -> InferenceResult -> basic decision -> Decision
-
-Structured so MiDaS, face, OCR, and fusion can be added later
-without changing the WebSocket transport layer.
-"""
+"""Inference pipeline: orchestrates models and produces a Decision."""
 
 from __future__ import annotations
 
 import logging
-import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
+import numpy as np
+
+from optivisionhackathon.server.fusion.engine import (
+    FusionEngine,
+    build_fusion_key,
+    build_speech_message,
+)
+from optivisionhackathon.server.models.depth import DepthEstimator
+from optivisionhackathon.server.models.face import FaceRecognizer
+from optivisionhackathon.server.models.ocr import OCREngine
 from optivisionhackathon.server.schemas import (
     Decision,
     Detection,
     DistanceLevel,
+    FaceDetection,
     InferenceResult,
     Priority,
+    TextDetection,
 )
 
 if TYPE_CHECKING:
-    import numpy as np
     from numpy.typing import NDArray
-
     from optivisionhackathon.server.models.yolo import YOLODetector
 
 logger = logging.getLogger(__name__)
 
-_DISTANCE_TO_PRIORITY = {
-    DistanceLevel.CRITICAL: Priority.CRITICAL,
-    DistanceLevel.WARNING: Priority.WARNING,
-    DistanceLevel.INFO: Priority.INFO,
-}
-
-_PRIORITY_RANK = {
-    Priority.CRITICAL: 3,
-    Priority.WARNING: 2,
-    Priority.INFO: 1,
-    Priority.NONE: 0,
-}
-
-
-def build_speech_message(detections: list[Detection]) -> str:
-    """Build a short spoken sentence from unique obstacle labels."""
-    if not detections:
-        return ""
-
-    # Unique labels, ordered by urgency then confidence.
-    ranked = sorted(
-        detections,
-        key=lambda d: (
-            _PRIORITY_RANK[_DISTANCE_TO_PRIORITY[d.distance_level]],
-            d.confidence,
-        ),
-        reverse=True,
-    )
-    labels: list[str] = []
-    seen: set[str] = set()
-    for det in ranked:
-        if det.label in seen:
-            continue
-        seen.add(det.label)
-        labels.append(det.label)
-
-    if len(labels) == 1:
-        return f"{labels[0].capitalize()} ahead."
-    if len(labels) == 2:
-        return f"There is a {labels[0]} and a {labels[1]} ahead."
-    leading = ", ".join(labels[:-1])
-    return f"There is a {leading}, and a {labels[-1]} ahead."
-
 
 def decision_key(detections: list[Detection]) -> str:
-    """Stable key for speech cooldown (sorted unique labels)."""
-    if not detections:
-        return "silent"
-    labels = sorted({d.label for d in detections})
-    top = max(
-        detections,
-        key=lambda d: (
-            _PRIORITY_RANK[_DISTANCE_TO_PRIORITY[d.distance_level]],
-            d.confidence,
-        ),
-    )
-    return f"{top.distance_level.value}:{','.join(labels)}"
+    """Stable key for speech cooldown (for backwards compatibility)."""
+    return build_fusion_key(detections)
 
 
 class Pipeline:
-    """Frame processing pipeline (YOLO-only for the current MVP)."""
+    """Full Visionnaire inference pipeline orchestrating YOLO, Depth, Face, OCR, and Fusion."""
 
     def __init__(
         self,
-        detector: YOLODetector,
+        detector: Any,
+        depth_estimator: Optional[DepthEstimator] = None,
+        face_recognizer: Optional[FaceRecognizer] = None,
+        ocr_engine: Optional[OCREngine] = None,
+        fusion_engine: Optional[FusionEngine] = None,
         cooldown_seconds: float = 2.0,
     ) -> None:
         self.detector = detector
+        self.depth_estimator = depth_estimator
+        self.face_recognizer = face_recognizer
+        self.ocr_engine = ocr_engine
         self.cooldown_seconds = cooldown_seconds
-        self._last_spoken_key: str | None = None
-        self._last_spoken_at: float = 0.0
+        self.fusion_engine = fusion_engine or FusionEngine(cooldown_seconds=cooldown_seconds)
 
     def process_frame(self, frame: NDArray[np.uint8]) -> Decision:
-        """Run inference on a frame and return a Decision for the client."""
+        """Run all active vision models on the frame and return a fused Decision."""
+        if frame is None or frame.size == 0:
+            return Decision.silent()
+
+        # 1. Obstacle detection
         detections = self.detector.detect(frame)
-        inference = InferenceResult(detections=detections)
 
-        # Future extension point:
-        # depth = self.depth_estimator.estimate(frame)
-        # faces = self.face_recognizer.recognize(frame)
-        # text = self.ocr_engine.read(frame)
-        # return self.fusion_engine.fuse(inference, depth, faces, text)
+        # 2. Depth / distance enrichment
+        if self.depth_estimator is not None and detections:
+            detections = self.depth_estimator.enrich_detections(detections, frame.shape[:2])
 
-        return self._decide(inference)
+        # 3. Face recognition (using person bounding boxes if available)
+        faces: list[FaceDetection] = []
+        if self.face_recognizer is not None:
+            person_boxes = [d.bbox for d in detections if d.label == "person"]
+            faces = self.face_recognizer.recognize(frame, person_boxes=person_boxes)
 
-    def _decide(self, inference: InferenceResult) -> Decision:
-        detections = list(inference.detections)
-        now_wall = time.time()
+        # 4. Scene text / OCR
+        texts: list[TextDetection] = []
+        if self.ocr_engine is not None:
+            texts = self.ocr_engine.read(frame)
 
-        if not detections:
-            return Decision.silent(detections=[], key="silent")
-
-        best = max(
-            detections,
-            key=lambda d: (
-                _PRIORITY_RANK[_DISTANCE_TO_PRIORITY[d.distance_level]],
-                d.confidence,
-            ),
-        )
-        priority = _DISTANCE_TO_PRIORITY[best.distance_level]
-        key = decision_key(detections)
-        message = build_speech_message(detections)
-
-        # Cooldown suppresses speech only — detections still returned for overlay.
-        now = time.monotonic()
-        if (
-            key == self._last_spoken_key
-            and (now - self._last_spoken_at) < self.cooldown_seconds
-        ):
-            logger.debug("Suppressing repeated speech: %s", key)
-            return Decision(
-                key=key,
-                message="",
-                priority=priority,
-                detections=detections,
-                timestamp=now_wall,
-            )
-
-        self._last_spoken_key = key
-        self._last_spoken_at = now
-        return Decision(
-            key=key,
-            message=message,
-            priority=priority,
+        # 5. Multimodal fusion & cooldown
+        return self.fusion_engine.fuse(
             detections=detections,
-            timestamp=now_wall,
+            faces=faces,
+            texts=texts,
         )

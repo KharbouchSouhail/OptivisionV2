@@ -71,6 +71,8 @@ async def run_client() -> None:
     client = DecisionClient()
 
     detections: list[dict[str, Any]] = []
+    faces: list[dict[str, Any]] = []
+    texts: list[dict[str, Any]] = []
     last_message = ""
     status = "starting"
     connected = False
@@ -135,6 +137,8 @@ async def run_client() -> None:
                     raw = pending.result()
                     decision = parse_decision(raw)
                     detections = decision["detections"]
+                    faces = decision.get("faces", [])
+                    texts = decision.get("texts", [])
                     msg = decision["message"]
                     if msg:
                         last_message = msg
@@ -195,6 +199,8 @@ async def run_client() -> None:
             annotated = annotate_frame(
                 frame,
                 detections=detections,
+                faces=faces,
+                texts=texts,
                 fps=display_fps,
                 connected=connected and client.connected,
                 status=status,
