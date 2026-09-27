@@ -21,39 +21,117 @@ logger = logging.getLogger(__name__)
 # COCO classes that are useful for visual assistance/navigation.
 OBSTACLE_CLASSES: frozenset[str] = frozenset(
     {
-        # People
+        # ============================================================
+        # PEOPLE
+        # ============================================================
         "person",
 
-        # Vehicles
+        # ============================================================
+        # VEHICLES
+        # ============================================================
         "bicycle",
         "car",
         "motorcycle",
         "bus",
         "truck",
+        "train",
+        "boat",
+        "airplane",
 
-        # Animals
-        "dog",
-        "cat",
-
-        # Furniture / indoor obstacles
-        "chair",
-        "bench",
-        "couch",
-        "bed",
-        "dining table",
-
-        # Objects someone may need to avoid
-        "backpack",
-        "suitcase",
-        "skateboard",
-        "surfboard",
-
-        # Important environmental objects
-        "potted plant",
+        # ============================================================
+        # ROAD / NAVIGATION OBJECTS
+        # ============================================================
         "traffic light",
         "stop sign",
         "fire hydrant",
         "parking meter",
+
+        # ============================================================
+        # OUTDOOR / STREET OBSTACLES
+        # ============================================================
+        "bench",
+        "potted plant",
+        "skateboard",
+        "surfboard",
+
+        # ============================================================
+        # FURNITURE / INDOOR OBSTACLES
+        # ============================================================
+        "chair",
+        "couch",
+        "bed",
+        "dining table",
+        "toilet",
+
+        # ============================================================
+        # BAGS / LUGGAGE
+        # ============================================================
+        "backpack",
+        "umbrella",
+        "handbag",
+        "suitcase",
+
+        # ============================================================
+        # SPORTS / LARGE OBJECTS
+        # ============================================================
+        "frisbee",
+        "skis",
+        "snowboard",
+        "sports ball",
+        "kite",
+        "baseball bat",
+        "baseball glove",
+        "tennis racket",
+        "bottle",
+
+        # ============================================================
+        # FOOD / TABLE OBJECTS
+        # Useful for scene understanding
+        # ============================================================
+        "wine glass",
+        "cup",
+        "fork",
+        "knife",
+        "spoon",
+        "bowl",
+
+        # ============================================================
+        # ELECTRONICS
+        # ============================================================
+        "laptop",
+        "mouse",
+        "remote",
+        "keyboard",
+        "cell phone",
+        "microwave",
+        "oven",
+        "toaster",
+        "refrigerator",
+
+        # ============================================================
+        # HOUSEHOLD / INDOOR OBJECTS
+        # ============================================================
+        "book",
+        "clock",
+        "vase",
+        "scissors",
+        "teddy bear",
+        "hair drier",
+        "toothbrush",
+
+        # ============================================================
+        # ANIMALS
+        # ============================================================
+        "bird",
+        "cat",
+        "dog",
+        "horse",
+        "sheep",
+        "cow",
+        "elephant",
+        "bear",
+        "zebra",
+        "giraffe",
     }
 )
 
