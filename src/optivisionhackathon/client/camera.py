@@ -47,29 +47,26 @@ class Camera:
             )
         logger.info("Camera opened (index=%s)", self.camera_index)
 
-    def read_jpeg(self) -> bytes:
-        """Capture one frame and return JPEG-encoded bytes."""
-        if self._cap is None or not self._cap.isOpened():
-            raise RuntimeError("camera is not open")
-
-        ok, frame = self._cap.read()
-        if not ok or frame is None:
-            raise RuntimeError("webcam read failure: could not capture frame")
-
-        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
-        ok, buffer = cv2.imencode(".jpg", frame, encode_params)
-        if not ok:
-            raise RuntimeError("failed to JPEG-encode frame")
-        return buffer.tobytes()
-
     def read_frame(self) -> np.ndarray:
-        """Capture one raw BGR frame (debug / local use)."""
+        """Capture one raw BGR frame."""
         if self._cap is None or not self._cap.isOpened():
             raise RuntimeError("camera is not open")
         ok, frame = self._cap.read()
         if not ok or frame is None:
             raise RuntimeError("webcam read failure: could not capture frame")
         return frame
+
+    def encode_jpeg(self, frame: np.ndarray) -> bytes:
+        """JPEG-encode an existing BGR frame (no extra capture)."""
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+        ok, buffer = cv2.imencode(".jpg", frame, encode_params)
+        if not ok:
+            raise RuntimeError("failed to JPEG-encode frame")
+        return buffer.tobytes()
+
+    def read_jpeg(self) -> bytes:
+        """Capture one frame and return JPEG-encoded bytes."""
+        return self.encode_jpeg(self.read_frame())
 
     def release(self) -> None:
         """Release the webcam cleanly."""

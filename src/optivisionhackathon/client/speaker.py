@@ -1,4 +1,4 @@
-"""Text-to-speech output via pyttsx3."""
+"""Text-to-speech output via pyttsx3 (eSpeak / eSpeak-ng)."""
 
 from __future__ import annotations
 
@@ -10,39 +10,54 @@ logger = logging.getLogger(__name__)
 
 
 class Speaker:
-    """Non-overlapping speech helper. Independent from networking."""
+    """Non-overlapping, non-blocking speech helper.
+
+    TTS runs on a background thread so the camera preview and WebSocket
+    loop are never blocked. Failures are logged and never crash the client.
+    """
 
     def __init__(self) -> None:
-        self._engine = None
         self._lock = threading.Lock()
         self._busy = False
         self._thread: Optional[threading.Thread] = None
+        self._available = False
+        self._started = False
 
     def start(self) -> None:
-        """Initialize the pyttsx3 engine."""
-        if self._engine is not None:
+        """Initialize and verify the TTS backend (best-effort)."""
+        if self._started:
             return
+        self._started = True
         try:
             import pyttsx3
-        except ImportError as exc:
-            raise RuntimeError(
-                "pyttsx3 is not installed; pip install pyttsx3"
-            ) from exc
 
-        logger.info("Initializing pyttsx3 speaker")
-        self._engine = pyttsx3.init()
+            engine = pyttsx3.init()
+            # Probe the backend without speaking aloud for long.
+            _ = engine.getProperty("voices")
+            engine.stop()
+            self._available = True
+            logger.info("TTS ready (pyttsx3 / eSpeak)")
+        except Exception:
+            self._available = False
+            logger.exception(
+                "TTS initialization failed — continuing without speech"
+            )
 
     def speak(self, message: str) -> bool:
-        """Speak a message if the speaker is free.
+        """Speak a message if free. Never blocks the caller.
 
-        Returns True if speech was started, False if skipped (busy / empty).
+        Returns True if speech was started, False if skipped / unavailable.
         """
         text = (message or "").strip()
         if not text:
             return False
 
-        if self._engine is None:
+        if not self._started:
             self.start()
+
+        if not self._available:
+            logger.debug("TTS unavailable; skipping: %s", text)
+            return False
 
         with self._lock:
             if self._busy:
@@ -60,30 +75,36 @@ class Speaker:
         return True
 
     def _speak_worker(self, text: str) -> None:
+        """Create a fresh engine per utterance (safer with eSpeak threads)."""
         try:
-            assert self._engine is not None
+            import pyttsx3
+
             logger.info("Speaking: %s", text)
-            self._engine.say(text)
-            self._engine.runAndWait()
+            engine = pyttsx3.init()
+            try:
+                engine.setProperty("rate", 175)
+            except Exception:
+                pass
+            engine.say(text)
+            engine.runAndWait()
+            try:
+                engine.stop()
+            except Exception:
+                pass
         except Exception:
             logger.exception("TTS error while speaking")
+            self._available = False
         finally:
             with self._lock:
                 self._busy = False
 
     def shutdown(self) -> None:
-        """Stop speech and release the engine."""
+        """Stop speech cleanly."""
         with self._lock:
             busy = self._busy
         if busy and self._thread is not None:
             self._thread.join(timeout=2.0)
-
-        if self._engine is not None:
-            try:
-                self._engine.stop()
-            except Exception:
-                logger.debug("Error stopping TTS engine", exc_info=True)
-            self._engine = None
+        self._available = False
         logger.info("Speaker shut down")
 
     def __enter__(self) -> Speaker:

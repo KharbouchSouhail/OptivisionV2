@@ -24,6 +24,19 @@ logging.basicConfig(
 logger = logging.getLogger("visionnaire.server")
 
 
+def _load_env() -> None:
+    if load_dotenv():
+        return
+    here = os.path.abspath(os.path.dirname(__file__))
+    for _ in range(5):
+        candidate = os.path.join(here, ".env")
+        if os.path.isfile(candidate):
+            load_dotenv(candidate)
+            return
+        here = os.path.dirname(here)
+    load_dotenv()
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -32,7 +45,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 async def _async_main() -> None:
-    load_dotenv()
+    _load_env()
 
     host = os.getenv("VISIONNAIRE_HOST", "0.0.0.0")
     port = _env_int("VISIONNAIRE_PORT", 8765)

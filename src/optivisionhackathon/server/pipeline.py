@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from optivisionhackathon.server.schemas import (
     Decision,
+    Detection,
     DistanceLevel,
     InferenceResult,
     Priority,
@@ -42,6 +43,51 @@ _PRIORITY_RANK = {
 }
 
 
+def build_speech_message(detections: list[Detection]) -> str:
+    """Build a short spoken sentence from unique obstacle labels."""
+    if not detections:
+        return ""
+
+    # Unique labels, ordered by urgency then confidence.
+    ranked = sorted(
+        detections,
+        key=lambda d: (
+            _PRIORITY_RANK[_DISTANCE_TO_PRIORITY[d.distance_level]],
+            d.confidence,
+        ),
+        reverse=True,
+    )
+    labels: list[str] = []
+    seen: set[str] = set()
+    for det in ranked:
+        if det.label in seen:
+            continue
+        seen.add(det.label)
+        labels.append(det.label)
+
+    if len(labels) == 1:
+        return f"{labels[0].capitalize()} ahead."
+    if len(labels) == 2:
+        return f"There is a {labels[0]} and a {labels[1]} ahead."
+    leading = ", ".join(labels[:-1])
+    return f"There is a {leading}, and a {labels[-1]} ahead."
+
+
+def decision_key(detections: list[Detection]) -> str:
+    """Stable key for speech cooldown (sorted unique labels)."""
+    if not detections:
+        return "silent"
+    labels = sorted({d.label for d in detections})
+    top = max(
+        detections,
+        key=lambda d: (
+            _PRIORITY_RANK[_DISTANCE_TO_PRIORITY[d.distance_level]],
+            d.confidence,
+        ),
+    )
+    return f"{top.distance_level.value}:{','.join(labels)}"
+
+
 class Pipeline:
     """Frame processing pipeline (YOLO-only for the current MVP)."""
 
@@ -57,7 +103,6 @@ class Pipeline:
 
     def process_frame(self, frame: NDArray[np.uint8]) -> Decision:
         """Run inference on a frame and return a Decision for the client."""
-        # --- YOLO ---
         detections = self.detector.detect(frame)
         inference = InferenceResult(detections=detections)
 
@@ -70,39 +115,44 @@ class Pipeline:
         return self._decide(inference)
 
     def _decide(self, inference: InferenceResult) -> Decision:
-        if not inference.detections:
-            return Decision.silent()
+        detections = list(inference.detections)
+        now_wall = time.time()
 
-        # Prefer the most urgent (closest / highest priority) obstacle.
+        if not detections:
+            return Decision.silent(detections=[], key="silent")
+
         best = max(
-            inference.detections,
+            detections,
             key=lambda d: (
                 _PRIORITY_RANK[_DISTANCE_TO_PRIORITY[d.distance_level]],
                 d.confidence,
             ),
         )
-
         priority = _DISTANCE_TO_PRIORITY[best.distance_level]
-        key = f"{best.distance_level.value}:{best.label}"
+        key = decision_key(detections)
+        message = build_speech_message(detections)
 
-        if best.distance_level == DistanceLevel.CRITICAL:
-            message = f"Careful! {best.label} very close ahead."
-        elif best.distance_level == DistanceLevel.WARNING:
-            message = f"Warning: {best.label} ahead."
-        else:
-            message = f"{best.label} nearby."
-
-        decision = Decision(key=key, message=message, priority=priority)
-
-        # Simple anti-spam: suppress repeating the same alert within cooldown.
+        # Cooldown suppresses speech only — detections still returned for overlay.
         now = time.monotonic()
         if (
-            decision.key == self._last_spoken_key
+            key == self._last_spoken_key
             and (now - self._last_spoken_at) < self.cooldown_seconds
         ):
-            logger.debug("Suppressing repeated decision: %s", decision.key)
-            return Decision.silent()
+            logger.debug("Suppressing repeated speech: %s", key)
+            return Decision(
+                key=key,
+                message="",
+                priority=priority,
+                detections=detections,
+                timestamp=now_wall,
+            )
 
-        self._last_spoken_key = decision.key
+        self._last_spoken_key = key
         self._last_spoken_at = now
-        return decision
+        return Decision(
+            key=key,
+            message=message,
+            priority=priority,
+            detections=detections,
+            timestamp=now_wall,
+        )

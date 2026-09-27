@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 import cv2
@@ -36,7 +37,13 @@ def _jpeg_to_frame(jpeg_bytes: bytes) -> np.ndarray:
 def _error_decision(_reason: str) -> Decision:
     from optivisionhackathon.server.schemas import Decision, Priority
 
-    return Decision(key="error", message="", priority=Priority.NONE)
+    return Decision(
+        key="error",
+        message="",
+        priority=Priority.NONE,
+        detections=[],
+        timestamp=time.time(),
+    )
 
 
 class VisionnaireServer:
@@ -97,7 +104,8 @@ class VisionnaireServer:
             return
 
         try:
-            decision = self.pipeline.process_frame(frame)
+            # Run blocking YOLO off the event loop so other clients stay responsive.
+            decision = await asyncio.to_thread(self.pipeline.process_frame, frame)
         except Exception as exc:
             logger.exception("Inference error")
             await self._send_decision(
@@ -114,5 +122,10 @@ class VisionnaireServer:
     async def run(self) -> None:
         """Bind to host:port and serve until cancelled."""
         logger.info("Starting WebSocket server on %s:%s", self.host, self.port)
-        async with websockets.serve(self._handle_client, self.host, self.port):
+        async with websockets.serve(
+            self._handle_client,
+            self.host,
+            self.port,
+            max_size=8 * 1024 * 1024,
+        ):
             await asyncio.Future()
